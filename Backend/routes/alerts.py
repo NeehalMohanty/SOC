@@ -7,6 +7,7 @@ from Backend.schemas import (
     Alert,
     AlertHistoryListResponse,
     AlertListResponse,
+    AlertRelatedEventsResponse,
     AlertStatus,
     AlertStatusUpdate,
     AlertUpdatedResponse,
@@ -14,6 +15,7 @@ from Backend.schemas import (
 )
 from Backend.services import (
     get_alert_by_id,
+    list_alert_events,
     list_alert_history,
     list_alerts,
     update_alert_status,
@@ -70,6 +72,17 @@ def get_alert_history(alert_id: int, request: Request) -> dict[str, Any]:
             detail="Alert not found",
         )
     return {"count": len(history), "history": history}
+
+
+@router.get("/{alert_id}/events", response_model=AlertRelatedEventsResponse)
+def get_alert_events(alert_id: int, request: Request) -> dict[str, Any]:
+    events = list_alert_events(alert_id, request.app.state.database_path)
+    if events is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Alert not found",
+        )
+    return {"count": len(events), "events": events}
 
 
 @router.get("/{alert_id}", response_model=Alert)

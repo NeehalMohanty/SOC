@@ -26,6 +26,7 @@ def post_event(client, **overrides):
         {"severity": "extreme"},
         {"event_type": "invalid event type"},
         {"username": "a" * 256},
+        {"host": "invalid host name"},
         {"message": "a" * 2001},
         {"unexpected_field": "not allowed"},
     ],
@@ -41,6 +42,7 @@ def test_event_input_is_normalized(client):
         destination_ip=None,
         event_type="  PORT_SCAN  ",
         username="  analyst  ",
+        host="  SERVER-01.EXAMPLE  ",
         severity="LOW",
         message="  scan detected  ",
     )
@@ -50,6 +52,7 @@ def test_event_input_is_normalized(client):
     assert event["source_ip"] == "2001:db8::1"
     assert event["event_type"] == "port_scan"
     assert event["username"] == "analyst"
+    assert event["host"] == "server-01.example"
     assert event["severity"] == "low"
     assert event["message"] == "scan detected"
 
@@ -174,9 +177,12 @@ def test_database_constraints_and_indexes_are_enabled(client):
             ).fetchall()
         }
         assert "idx_events_timestamp" in indexes
+        assert "idx_events_host" in indexes
         assert "idx_alerts_status" in indexes
         assert "idx_alerts_rule_id" in indexes
         assert "idx_alerts_risk_score" in indexes
+        assert "idx_alerts_correlation_key" in indexes
+        assert "idx_alert_events_event_id" in indexes
         assert "idx_alert_history_alert_id" in indexes
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     finally:
@@ -246,11 +252,31 @@ def test_detection_columns_are_added_without_losing_legacy_alerts(tmp_path):
             row["name"]
             for row in migrated.execute("PRAGMA table_info(alerts)").fetchall()
         }
-        assert {"rule_id", "evidence", "risk_score", "detected_at"} <= columns
+        assert {
+            "rule_id",
+            "evidence",
+            "risk_score",
+            "detected_at",
+            "detection_source",
+            "correlation_key",
+        } <= columns
+        event_columns = {
+            row["name"]
+            for row in migrated.execute("PRAGMA table_info(events)").fetchall()
+        }
+        assert "host" in event_columns
+        assert migrated.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'alert_events'"
+        ).fetchone() is not None
         legacy_alert = migrated.execute(
             "SELECT title, rule_id FROM alerts WHERE id = 1"
         ).fetchone()
         assert legacy_alert["title"] == "Legacy Alert"
         assert legacy_alert["rule_id"] is None
+        legacy_link = migrated.execute(
+            "SELECT event_id, relationship FROM alert_events WHERE alert_id = 1"
+        ).fetchone()
+        assert legacy_link["event_id"] == 1
+        assert legacy_link["relationship"] == "trigger"
     finally:
         migrated.close()

@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, IPvAnyAddress, field_validator
 
@@ -26,6 +26,11 @@ class SecurityEventCreate(APIModel):
     destination_ip: Optional[IPvAnyAddress] = None
     event_type: str = Field(min_length=1, max_length=100, pattern=r"^[a-z0-9_.:-]+$")
     username: Optional[str] = Field(default=None, max_length=255)
+    host: Optional[str] = Field(
+        default=None,
+        max_length=255,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    )
     severity: Severity = Severity.LOW
     message: Optional[str] = Field(default=None, max_length=2000)
 
@@ -39,18 +44,29 @@ class SecurityEventCreate(APIModel):
     def normalize_severity(cls, value: Any) -> Any:
         return value.strip().lower() if isinstance(value, str) else value
 
-    @field_validator("username", "message", mode="before")
+    @field_validator("username", "host", "message", mode="before")
     @classmethod
     def normalize_optional_text(cls, value: Any) -> Any:
         if not isinstance(value, str):
             return value
         normalized = value.strip()
-        return normalized or None
+        if not normalized:
+            return None
+        return normalized
+
+    @field_validator("host", mode="after")
+    @classmethod
+    def normalize_host(cls, value: Optional[str]) -> Optional[str]:
+        return value.lower() if value else None
 
 
 class SecurityEvent(SecurityEventCreate):
     id: int
     timestamp: str
+
+
+class AlertRelatedEvent(SecurityEvent):
+    relationship: Literal["trigger", "related", "grouped"]
 
 
 class Alert(APIModel):
@@ -71,6 +87,8 @@ class Alert(APIModel):
     mitre_technique_id: Optional[str] = None
     mitre_technique_name: Optional[str] = None
     detected_at: Optional[str] = None
+    detection_source: Optional[str] = None
+    related_event_ids: list[int] = Field(default_factory=list)
 
 
 class AlertStatusUpdate(APIModel):
@@ -108,6 +126,8 @@ class EventCreatedResponse(APIModel):
     alert_id: Optional[int] = None
     alerts_created: int = 0
     alert_ids: list[int] = Field(default_factory=list)
+    alerts_suppressed: int = 0
+    grouped_alert_ids: list[int] = Field(default_factory=list)
 
 
 class EventListResponse(APIModel):
@@ -129,6 +149,11 @@ class AlertListResponse(APIModel):
 class AlertHistoryListResponse(APIModel):
     count: int
     history: list[AlertStatusHistory]
+
+
+class AlertRelatedEventsResponse(APIModel):
+    count: int
+    events: list[AlertRelatedEvent]
 
 
 class AlertUpdatedResponse(APIModel):

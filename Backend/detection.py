@@ -23,9 +23,6 @@ class DetectedAlert(TypedDict):
 
 @dataclass(frozen=True)
 class DetectionContext:
-    failed_login_count: int = 0
-    failed_login_threshold: int = 5
-    failed_login_window_minutes: int = 5
     detected_at: datetime | None = None
 
 
@@ -47,6 +44,7 @@ def _base_evidence(
         "source_ip": str(event.source_ip),
         "destination_ip": str(event.destination_ip) if event.destination_ip else None,
         "username": _normalized(event.username),
+        "host": _normalized(event.host),
         "event_severity": severity,
     }
 
@@ -177,38 +175,6 @@ def analyze_event(
                 mitre_tactic="Initial Access",
                 mitre_technique_id="T1078",
                 mitre_technique_name="Valid Accounts",
-            )
-        )
-
-    if (
-        event_type == "failed_login"
-        and context.failed_login_count == context.failed_login_threshold
-    ):
-        threshold_evidence = {
-            **evidence,
-            "failed_login_count": context.failed_login_count,
-            "threshold": context.failed_login_threshold,
-            "window_minutes": context.failed_login_window_minutes,
-        }
-        detections.append(
-            _alert(
-                rule_id="TG-AUTH-001",
-                rule_name="Repeated Failed Logins",
-                category="credential-access",
-                title="Possible Brute-Force Attack",
-                description=(
-                    f"{context.failed_login_count} failed logins were observed within "
-                    f"{context.failed_login_window_minutes} minutes for source "
-                    f"{event.source_ip} or user {event.username or 'unknown'}."
-                ),
-                severity="high",
-                confidence=90,
-                risk_score=85,
-                evidence=threshold_evidence,
-                detected_at=detected_at,
-                mitre_tactic="Credential Access",
-                mitre_technique_id="T1110",
-                mitre_technique_name="Brute Force",
             )
         )
 

@@ -57,23 +57,8 @@ def test_detection_rules_are_explainable(
 def test_one_failed_login_does_not_create_an_alert():
     assert analyze_event(
         make_event("failed_login"),
-        DetectionContext(failed_login_count=1, detected_at=DETECTION_TIME),
+        DetectionContext(detected_at=DETECTION_TIME),
     ) == []
-
-
-def test_failed_login_threshold_creates_brute_force_detection():
-    detections = analyze_event(
-        make_event("failed_login"),
-        DetectionContext(failed_login_count=5, detected_at=DETECTION_TIME),
-    )
-
-    assert len(detections) == 1
-    detection = detections[0]
-    assert detection["rule_id"] == "TG-AUTH-001"
-    assert detection["mitre_technique_id"] == "T1110"
-    assert detection["evidence"]["failed_login_count"] == 5
-    assert detection["evidence"]["threshold"] == 5
-    assert detection["evidence"]["window_minutes"] == 5
 
 
 def test_all_applicable_rules_are_returned():
