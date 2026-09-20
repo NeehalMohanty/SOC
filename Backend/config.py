@@ -33,7 +33,7 @@ def _get_cors_origins() -> tuple[str, ...]:
 @dataclass(frozen=True)
 class Settings:
     app_name: str = _environment("TETHYSGUARD_APP_NAME", "TethysGuard API")
-    app_version: str = _environment("TETHYSGUARD_APP_VERSION", "0.4.0")
+    app_version: str = _environment("TETHYSGUARD_APP_VERSION", "0.5.0")
     app_description: str = "Cybersecurity monitoring and threat detection platform"
     database_path: Path = Path(
         _environment("TETHYSGUARD_DATABASE_PATH", str(_default_database_path()))
@@ -47,6 +47,18 @@ class Settings:
     )
     failed_login_window_minutes: int = int(
         _environment("TETHYSGUARD_FAILED_LOGIN_WINDOW_MINUTES", "5")
+    )
+    correlation_window_minutes: int = int(
+        _environment("TETHYSGUARD_CORRELATION_WINDOW_MINUTES", "10")
+    )
+    repeated_scan_threshold: int = int(
+        _environment("TETHYSGUARD_REPEATED_SCAN_THRESHOLD", "3")
+    )
+    suspicious_host_threshold: int = int(
+        _environment("TETHYSGUARD_SUSPICIOUS_HOST_THRESHOLD", "3")
+    )
+    alert_suppression_minutes: int = int(
+        _environment("TETHYSGUARD_ALERT_SUPPRESSION_MINUTES", "5")
     )
 
 

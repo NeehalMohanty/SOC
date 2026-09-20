@@ -3,8 +3,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from Backend.database import database_connection
 from Backend.config import settings
+from Backend.correlation import CorrelationContext, correlate_events
+from Backend.database import database_connection
 from Backend.detection import DetectionContext, analyze_event
 from Backend.schemas import AlertStatus, SecurityEventCreate, Severity
 
@@ -47,7 +48,10 @@ def _like_pattern(value: str) -> str:
     return f"%{escaped}%"
 
 
-def _alert_from_row(row: Any) -> dict[str, Any]:
+def _alert_from_row(
+    row: Any,
+    related_event_ids: list[int] | None = None,
+) -> dict[str, Any]:
     alert = dict(row)
     serialized_evidence = alert.get("evidence")
     if serialized_evidence:
@@ -57,39 +61,112 @@ def _alert_from_row(row: Any) -> dict[str, Any]:
             alert["evidence"] = {"legacy_value": str(serialized_evidence)}
     else:
         alert["evidence"] = None
+    alert.pop("correlation_key", None)
+    alert["related_event_ids"] = related_event_ids or []
     return alert
 
 
-def _failed_login_count(
+def _related_event_map(
     connection: Any,
-    event: SecurityEventCreate,
-    timestamp: datetime,
-) -> int:
-    if event.event_type != "failed_login":
-        return 0
+    alert_ids: list[int],
+) -> dict[int, list[int]]:
+    if not alert_ids:
+        return {}
+    placeholders = ", ".join("?" for _ in alert_ids)
+    rows = connection.execute(
+        f"""
+        SELECT alert_id, event_id FROM alert_events
+        WHERE alert_id IN ({placeholders})
+        ORDER BY event_id
+        """,
+        alert_ids,
+    ).fetchall()
+    related: dict[int, list[int]] = {alert_id: [] for alert_id in alert_ids}
+    for row in rows:
+        related[int(row["alert_id"])].append(int(row["event_id"]))
+    return related
 
-    window_start = timestamp - timedelta(
-        minutes=settings.failed_login_window_minutes
+
+def _recent_events(
+    connection: Any,
+    timestamp: datetime,
+) -> list[dict[str, Any]]:
+    window_minutes = max(
+        settings.failed_login_window_minutes,
+        settings.correlation_window_minutes,
     )
-    username = event.username
-    return int(
+    cutoff = timestamp - timedelta(minutes=window_minutes)
+    rows = connection.execute(
+        """
+        SELECT * FROM events
+        WHERE timestamp >= ? AND timestamp <= ?
+        ORDER BY timestamp, id
+        """,
+        (cutoff.isoformat(), timestamp.isoformat()),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _static_correlation_key(
+    detection: dict[str, Any],
+    event: SecurityEventCreate,
+) -> str:
+    rule_id = detection["rule_id"]
+    source_ip = str(event.source_ip)
+    if rule_id == "TG-NET-001":
+        return f"{rule_id}:{source_ip}"
+    if rule_id in {"TG-IAM-001", "TG-AUTH-002"}:
+        return f"{rule_id}:{source_ip}:{event.username or '-'}"
+    if rule_id == "TG-MAL-001":
+        target = event.host or event.destination_ip or "-"
+        return f"{rule_id}:{source_ip}:{target}"
+    return f"{rule_id}:{source_ip}:{event.event_type}"
+
+
+def _suppressed_alert_id(
+    connection: Any,
+    correlation_key: str,
+    timestamp: datetime,
+    suppression_minutes: int,
+) -> int | None:
+    cutoff = timestamp - timedelta(minutes=suppression_minutes)
+    row = connection.execute(
+        """
+        SELECT id FROM alerts
+        WHERE correlation_key = ?
+            AND timestamp >= ?
+            AND status != 'resolved'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (correlation_key, cutoff.isoformat()),
+    ).fetchone()
+    return int(row["id"]) if row is not None else None
+
+
+def _link_alert_events(
+    connection: Any,
+    alert_id: int,
+    event_ids: list[int],
+    trigger_event_id: int,
+    timestamp: str,
+    grouped: bool = False,
+) -> None:
+    for related_event_id in sorted(set(event_ids)):
+        if grouped:
+            relationship = "grouped"
+        elif related_event_id == trigger_event_id:
+            relationship = "trigger"
+        else:
+            relationship = "related"
         connection.execute(
             """
-            SELECT COUNT(*) FROM events
-            WHERE event_type = 'failed_login'
-                AND timestamp >= ?
-                AND timestamp <= ?
-                AND (source_ip = ? OR (? IS NOT NULL AND username = ?))
+            INSERT OR IGNORE INTO alert_events (
+                alert_id, event_id, relationship, created_at
+            ) VALUES (?, ?, ?, ?)
             """,
-            (
-                window_start.isoformat(),
-                timestamp.isoformat(),
-                str(event.source_ip),
-                username,
-                username,
-            ),
-        ).fetchone()[0]
-    )
+            (alert_id, related_event_id, relationship, timestamp),
+        )
 
 
 def create_security_event(
@@ -107,33 +184,79 @@ def create_security_event(
                 destination_ip,
                 event_type,
                 username,
+                host,
                 severity,
                 message,
                 timestamp
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(event.source_ip),
                 str(event.destination_ip) if event.destination_ip else None,
                 event.event_type,
                 event.username,
+                event.host,
                 event.severity.value,
                 event.message,
                 timestamp,
             ),
         )
         event_id = int(cursor.lastrowid)
-        detection_context = DetectionContext(
-            failed_login_count=_failed_login_count(connection, event, event_time),
+        detection_context = DetectionContext(detected_at=event_time)
+        detected_alerts: list[dict[str, Any]] = [
+            {
+                **detection,
+                "detection_source": "rule",
+                "correlation_key": _static_correlation_key(detection, event),
+                "related_event_ids": [event_id],
+                "suppression_minutes": settings.alert_suppression_minutes,
+            }
+            for detection in analyze_event(event, detection_context)
+        ]
+        correlation_context = CorrelationContext(
+            detected_at=event_time,
             failed_login_threshold=settings.failed_login_threshold,
             failed_login_window_minutes=settings.failed_login_window_minutes,
-            detected_at=event_time,
+            correlation_window_minutes=settings.correlation_window_minutes,
+            repeated_scan_threshold=settings.repeated_scan_threshold,
+            suspicious_host_threshold=settings.suspicious_host_threshold,
         )
-        detected_alerts = analyze_event(event, detection_context)
+        detected_alerts.extend(
+            correlate_events(
+                event_id,
+                event,
+                _recent_events(connection, event_time),
+                correlation_context,
+            )
+        )
         alert_ids: list[int] = []
+        grouped_alert_ids: list[int] = []
+        alerts_suppressed = 0
 
         for detected_alert in detected_alerts:
+            correlation_key = detected_alert["correlation_key"]
+            related_event_ids = detected_alert["related_event_ids"]
+            suppressed_alert_id = _suppressed_alert_id(
+                connection,
+                correlation_key,
+                event_time,
+                int(detected_alert["suppression_minutes"]),
+            )
+            if suppressed_alert_id is not None:
+                _link_alert_events(
+                    connection,
+                    suppressed_alert_id,
+                    related_event_ids,
+                    event_id,
+                    timestamp,
+                    grouped=True,
+                )
+                alerts_suppressed += 1
+                if suppressed_alert_id not in grouped_alert_ids:
+                    grouped_alert_ids.append(suppressed_alert_id)
+                continue
+
             alert_cursor = connection.execute(
                 """
                 INSERT INTO alerts (
@@ -152,9 +275,11 @@ def create_security_event(
                     mitre_tactic,
                     mitre_technique_id,
                     mitre_technique_name,
-                    detected_at
+                    detected_at,
+                    detection_source,
+                    correlation_key
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_id,
@@ -173,9 +298,19 @@ def create_security_event(
                     detected_alert["mitre_technique_id"],
                     detected_alert["mitre_technique_name"],
                     detected_alert["detected_at"],
+                    detected_alert["detection_source"],
+                    correlation_key,
                 ),
             )
-            alert_ids.append(int(alert_cursor.lastrowid))
+            alert_id = int(alert_cursor.lastrowid)
+            alert_ids.append(alert_id)
+            _link_alert_events(
+                connection,
+                alert_id,
+                related_event_ids,
+                event_id,
+                timestamp,
+            )
 
     return {
         "message": "Security event processed",
@@ -184,6 +319,8 @@ def create_security_event(
         "alert_id": alert_ids[0] if alert_ids else None,
         "alerts_created": len(alert_ids),
         "alert_ids": alert_ids,
+        "alerts_suppressed": alerts_suppressed,
+        "grouped_alert_ids": grouped_alert_ids,
     }
 
 
@@ -226,11 +363,12 @@ def list_events(
                 OR COALESCE(destination_ip, '') LIKE ? ESCAPE '\\'
                 OR event_type LIKE ? ESCAPE '\\'
                 OR COALESCE(username, '') LIKE ? ESCAPE '\\'
+                OR COALESCE(host, '') LIKE ? ESCAPE '\\'
                 OR COALESCE(message, '') LIKE ? ESCAPE '\\')
             """
         )
         pattern = _like_pattern(search)
-        parameters.extend([pattern] * 5)
+        parameters.extend([pattern] * 6)
 
     where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
     sort_column = EVENT_SORT_COLUMNS[sort_by]
@@ -307,8 +445,13 @@ def list_alerts(
             """,
             [*parameters, limit, offset],
         ).fetchall()
+        alert_ids = [int(row["id"]) for row in rows]
+        related_events = _related_event_map(connection, alert_ids)
 
-    return total, [_alert_from_row(row) for row in rows]
+    return total, [
+        _alert_from_row(row, related_events.get(int(row["id"]), []))
+        for row in rows
+    ]
 
 
 def get_alert_by_id(
@@ -320,7 +463,12 @@ def get_alert_by_id(
             "SELECT * FROM alerts WHERE id = ?",
             (alert_id,),
         ).fetchone()
-    return _alert_from_row(row) if row is not None else None
+        related_events = _related_event_map(connection, [alert_id])
+    return (
+        _alert_from_row(row, related_events.get(alert_id, []))
+        if row is not None
+        else None
+    )
 
 
 def update_alert_status(
@@ -361,8 +509,9 @@ def update_alert_status(
             "SELECT * FROM alerts WHERE id = ?",
             (alert_id,),
         ).fetchone()
+        related_events = _related_event_map(connection, [alert_id])
 
-    return _alert_from_row(updated_alert)
+    return _alert_from_row(updated_alert, related_events.get(alert_id, []))
 
 
 def list_alert_history(
@@ -382,6 +531,32 @@ def list_alert_history(
             SELECT * FROM alert_status_history
             WHERE alert_id = ?
             ORDER BY id DESC
+            """,
+            (alert_id,),
+        ).fetchall()
+
+    return [dict(row) for row in rows]
+
+
+def list_alert_events(
+    alert_id: int,
+    database_path: Path | str,
+) -> list[dict[str, Any]] | None:
+    with database_connection(database_path) as connection:
+        alert_exists = connection.execute(
+            "SELECT id FROM alerts WHERE id = ?",
+            (alert_id,),
+        ).fetchone()
+        if alert_exists is None:
+            return None
+
+        rows = connection.execute(
+            """
+            SELECT events.*, alert_events.relationship
+            FROM alert_events
+            JOIN events ON events.id = alert_events.event_id
+            WHERE alert_events.alert_id = ?
+            ORDER BY events.timestamp, events.id
             """,
             (alert_id,),
         ).fetchall()

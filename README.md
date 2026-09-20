@@ -11,6 +11,9 @@ TethysGuard is a cybersecurity monitoring and threat-detection platform built as
 - Rule IDs, evidence, confidence, risk scores, and detection timestamps
 - MITRE ATT&CK mappings for supported detections
 - Threshold-based failed-login detection to reduce noisy alerts
+- Multi-event correlation for brute force, repeated scans, attack sequences, and suspicious host activity
+- Alert deduplication, suppression, and event grouping
+- Related-event evidence for alert investigation
 - Alert lookup and status updates
 - Alert status audit history
 - Paginated event and alert search
@@ -25,6 +28,7 @@ TethysGuard/
 |-- Backend/
 |   |-- routes/        # API endpoints
 |   |-- config.py      # Environment-based settings
+|   |-- correlation.py # Multi-event correlation rules
 |   |-- database.py    # SQLite connections and schema setup
 |   |-- detection.py   # Detection rules
 |   |-- main.py        # FastAPI application setup
@@ -87,6 +91,10 @@ The defaults work for local development. Optional environment variables are docu
 - `TETHYSGUARD_MAX_REQUEST_BODY_BYTES`
 - `TETHYSGUARD_FAILED_LOGIN_THRESHOLD`
 - `TETHYSGUARD_FAILED_LOGIN_WINDOW_MINUTES`
+- `TETHYSGUARD_CORRELATION_WINDOW_MINUTES`
+- `TETHYSGUARD_REPEATED_SCAN_THRESHOLD`
+- `TETHYSGUARD_SUSPICIOUS_HOST_THRESHOLD`
+- `TETHYSGUARD_ALERT_SUPPRESSION_MINUTES`
 
 The application reads environment variables directly. It does not automatically load `.env` files yet.
 
@@ -102,6 +110,7 @@ Existing installations retain access to their original database: if `Backend/tet
 | `GET` | `/api/events` | Retrieve events |
 | `GET` | `/api/alerts` | Retrieve alerts |
 | `GET` | `/api/alerts/{alert_id}` | Retrieve one alert |
+| `GET` | `/api/alerts/{alert_id}/events` | Retrieve events related to an alert |
 | `PATCH` | `/api/alerts/{alert_id}` | Update alert status |
 | `GET` | `/api/alerts/{alert_id}/history` | Retrieve alert status history |
 | `GET` | `/api/dashboard/stats` | Retrieve dashboard statistics |
@@ -168,4 +177,17 @@ Completed:
 - Multiple rule matches for one event when appropriate
 - Detection tests for malware, port scans, unauthorized access, suspicious authentication, brute force, and critical events
 
-Event correlation, realistic telemetry ingestion, and the React dashboard are planned for later phases.
+### Phase 5 - Event correlation
+
+Completed:
+
+- Time-window grouping by source IP, username, and host
+- Brute-force correlation across related failed-login events
+- Reconnaissance followed by authentication activity detection
+- Repeated network-scan correlation
+- Suspicious host activity correlation
+- Alert deduplication, suppression, and grouping
+- Related-event storage and retrieval for investigations
+- Deterministic correlation and API tests
+
+Realistic telemetry ingestion and the React dashboard are planned for later phases.

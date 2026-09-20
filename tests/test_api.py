@@ -1,15 +1,15 @@
-def create_event(client, event_type="normal_activity", severity="low"):
-    return client.post(
-        "/api/events",
-        json={
-            "source_ip": "192.0.2.10",
-            "destination_ip": "198.51.100.20",
-            "event_type": event_type,
-            "username": "analyst",
-            "severity": severity,
-            "message": "Automated test event",
-        },
-    )
+def create_event(client, event_type="normal_activity", severity="low", **overrides):
+    payload = {
+        "source_ip": "192.0.2.10",
+        "destination_ip": "198.51.100.20",
+        "event_type": event_type,
+        "username": "analyst",
+        "host": "server-01",
+        "severity": severity,
+        "message": "Automated test event",
+    }
+    payload.update(overrides)
+    return client.post("/api/events", json=payload)
 
 
 def test_root_and_health(client):
@@ -34,6 +34,8 @@ def test_event_without_detection_is_stored(client):
     assert response.json()["alert_id"] is None
     assert response.json()["alerts_created"] == 0
     assert response.json()["alert_ids"] == []
+    assert response.json()["alerts_suppressed"] == 0
+    assert response.json()["grouped_alert_ids"] == []
 
     events_response = client.get("/api/events")
     assert events_response.status_code == 200
@@ -65,6 +67,8 @@ def test_detected_event_creates_retrievable_alert(client):
     assert alert_response.json()["evidence"]["source_ip"] == "192.0.2.10"
     assert alert_response.json()["mitre_technique_id"] == "T1046"
     assert alert_response.json()["detected_at"]
+    assert alert_response.json()["detection_source"] == "rule"
+    assert alert_response.json()["related_event_ids"] == [response.json()["event_id"]]
 
 
 def test_failed_login_alert_requires_threshold(client):
@@ -86,6 +90,69 @@ def test_failed_login_alert_requires_threshold(client):
     assert alert["title"] == "Possible Brute-Force Attack"
     assert alert["evidence"]["failed_login_count"] == 5
     assert alert["mitre_technique_id"] == "T1110"
+    assert alert["detection_source"] == "correlation"
+    assert len(alert["related_event_ids"]) == 5
+
+
+def test_duplicate_alerts_are_suppressed_and_grouped(client):
+    first = create_event(client, event_type="port_scan").json()
+    second = create_event(client, event_type="port_scan").json()
+
+    assert first["alerts_created"] == 1
+    assert second["alerts_created"] == 0
+    assert second["alerts_suppressed"] == 1
+    assert second["grouped_alert_ids"] == [first["alert_id"]]
+    grouped_alert = client.get(f"/api/alerts/{first['alert_id']}").json()
+    assert grouped_alert["related_event_ids"] == [
+        first["event_id"],
+        second["event_id"],
+    ]
+    related_response = client.get(
+        f"/api/alerts/{first['alert_id']}/events"
+    )
+    assert related_response.status_code == 200
+    assert related_response.json()["count"] == 2
+    assert related_response.json()["events"][0]["relationship"] == "trigger"
+    assert related_response.json()["events"][1]["relationship"] == "grouped"
+
+
+def test_resolved_alert_does_not_suppress_new_activity(client):
+    first = create_event(client, event_type="port_scan").json()
+    client.patch(
+        f"/api/alerts/{first['alert_id']}",
+        json={"status": "resolved"},
+    )
+
+    second = create_event(client, event_type="port_scan").json()
+
+    assert second["alerts_created"] == 1
+    assert second["alerts_suppressed"] == 0
+    assert second["alert_id"] != first["alert_id"]
+
+
+def test_repeated_scans_create_one_correlated_alert(client):
+    create_event(client, event_type="port_scan")
+    create_event(client, event_type="port_scan")
+    third = create_event(client, event_type="port_scan").json()
+
+    assert third["alerts_created"] == 1
+    assert third["alerts_suppressed"] == 1
+    correlated = client.get(f"/api/alerts/{third['alert_id']}").json()
+    assert correlated["rule_id"] == "TG-CORR-002"
+    assert correlated["detection_source"] == "correlation"
+    assert len(correlated["related_event_ids"]) == 3
+    assert client.get("/api/alerts").json()["total"] == 2
+
+
+def test_reconnaissance_then_login_creates_sequence_alert(client):
+    scan = create_event(client, event_type="port_scan").json()
+    login = create_event(client, event_type="failed_login").json()
+
+    assert login["alerts_created"] == 1
+    alert = client.get(f"/api/alerts/{login['alert_id']}").json()
+    assert alert["rule_id"] == "TG-CORR-001"
+    assert alert["risk_score"] == 92
+    assert alert["related_event_ids"] == [scan["event_id"], login["event_id"]]
 
 
 def test_one_event_can_create_multiple_explainable_alerts(client):
@@ -124,6 +191,7 @@ def test_alert_status_workflow(client):
 
 def test_missing_resources_and_invalid_payloads(client):
     assert client.get("/api/alerts/999").status_code == 404
+    assert client.get("/api/alerts/999/events").status_code == 404
     assert client.patch(
         "/api/alerts/999",
         json={"status": "open"},
