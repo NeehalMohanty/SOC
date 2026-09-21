@@ -20,6 +20,8 @@ TethysGuard is a cybersecurity monitoring and threat-detection platform built as
 - Severity, status, source IP, event type, and date filters
 - Dashboard statistics
 - Interactive OpenAPI documentation
+- Batch telemetry ingestion with per-record validation results
+- SSH authentication message normalization and brute-force detection
 
 ## Project structure
 
@@ -31,10 +33,12 @@ TethysGuard/
 |   |-- correlation.py # Multi-event correlation rules
 |   |-- database.py    # SQLite connections and schema setup
 |   |-- detection.py   # Detection rules
+|   |-- ingestion.py   # Telemetry adapters and batch processing
 |   |-- main.py        # FastAPI application setup
 |   |-- schemas.py     # Request and response models
 |   `-- services.py    # Application and database operations
 |-- tests/             # Automated API tests
+|-- examples/          # Synthetic telemetry for local demonstrations
 |-- .env.example       # Safe configuration example
 |-- requirements.txt   # Runtime dependencies
 `-- requirements-dev.txt
@@ -107,6 +111,7 @@ Existing installations retain access to their original database: if `Backend/tet
 | `GET` | `/` | API information |
 | `GET` | `/health` | Health check |
 | `POST` | `/api/events` | Submit a security event |
+| `POST` | `/api/ingest/batch` | Import native events or SSH authentication messages |
 | `GET` | `/api/events` | Retrieve events |
 | `GET` | `/api/alerts` | Retrieve alerts |
 | `GET` | `/api/alerts/{alert_id}` | Retrieve one alert |
@@ -190,4 +195,35 @@ Completed:
 - Related-event storage and retrieval for investigations
 - Deterministic correlation and API tests
 
-Realistic telemetry ingestion and the React dashboard are planned for later phases.
+### Phase 6 - Telemetry ingestion
+
+Completed:
+
+- Batch JSON ingestion through `POST /api/ingest/batch`
+- Native security-event and SSH authentication adapters
+- Per-record validation errors with zero-based indices
+- Reuse of detection, correlation, suppression, and investigation evidence
+- Synthetic SSH demo data and automated ingestion tests
+
+The React SOC dashboard is the next planned phase. See [PROGRESS.md](PROGRESS.md) for remaining ingestion limitations.
+
+## Import telemetry
+
+With the backend running, submit the synthetic sample from PowerShell:
+
+```powershell
+$batch = Get-Content -Raw examples/ssh-auth-batch.json
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/ingest/batch -ContentType 'application/json' -Body $batch
+Invoke-RestMethod -Uri http://127.0.0.1:8000/api/alerts
+```
+
+On a fresh database with default thresholds, five failed logins create a `TG-AUTH-001` brute-force alert. The sixth record is a successful login from a different IP and creates no alert. These are synthetic documentation IP addresses; no network traffic is generated.
+
+Each request selects one `source` and supplies 1–100 `records`:
+
+- `security_event`: each record uses the same fields as `POST /api/events`.
+- `ssh_auth`: each record contains `host` and `message`. Supply the sshd message body, such as `Failed password for invalid user admin from 192.0.2.10 port 52101 ssh2`, without the syslog timestamp or process prefix. Supported forms are `Failed` or `Accepted`, with `password` or `publickey`; optional key details after `ssh2` are preserved. This is a deliberately limited parser, not a complete syslog collector.
+
+Responses contain `received`, `accepted`, `rejected`, `results`, and `errors`. Each result or error identifies the original zero-based record `index`. Accepted results include event IDs, new alert IDs, and suppression/grouping details. Malformed records are rejected without storing them, while valid records continue. A valid envelope returns HTTP 200 even when every record is rejected; invalid envelopes return 422.
+
+The existing request-size limit still applies (16 KiB by default), so split larger batches even when they contain fewer than 100 records. Events use arrival timestamps: submitting old logs together can produce correlation alerts that would not reflect their original timing. Each accepted event commits independently; a database failure returns 500 and earlier records may already be stored. Retrying records creates new events, although matching active alerts can be suppressed. Use locally until authentication and replay protection are added.

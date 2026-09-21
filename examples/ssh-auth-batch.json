@@ -1,0 +1,11 @@
+{
+  "source": "ssh_auth",
+  "records": [
+    {"host": "web-01", "message": "Failed password for invalid user admin from 192.0.2.10 port 52101 ssh2"},
+    {"host": "web-01", "message": "Failed password for invalid user admin from 192.0.2.10 port 52102 ssh2"},
+    {"host": "web-01", "message": "Failed password for invalid user admin from 192.0.2.10 port 52103 ssh2"},
+    {"host": "web-01", "message": "Failed password for invalid user admin from 192.0.2.10 port 52104 ssh2"},
+    {"host": "web-01", "message": "Failed password for invalid user admin from 192.0.2.10 port 52105 ssh2"},
+    {"host": "web-01", "message": "Accepted publickey for analyst from 198.51.100.20 port 53000 ssh2"}
+  ]
+}
