@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from Backend.config import settings
 from Backend.database import initialize_database
-from Backend.routes import alerts, dashboard, events, system
+from Backend.routes import alerts, dashboard, events, ingestion, system
 
 
 logger = logging.getLogger(__name__)
@@ -80,6 +80,7 @@ def create_app(database_path: Path | str | None = None) -> FastAPI:
 
     application.include_router(system.router)
     application.include_router(events.router)
+    application.include_router(ingestion.router)
     application.include_router(alerts.router)
     application.include_router(dashboard.router)
 

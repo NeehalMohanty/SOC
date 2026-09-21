@@ -33,7 +33,7 @@ def _get_cors_origins() -> tuple[str, ...]:
 @dataclass(frozen=True)
 class Settings:
     app_name: str = _environment("TETHYSGUARD_APP_NAME", "TethysGuard API")
-    app_version: str = _environment("TETHYSGUARD_APP_VERSION", "0.5.0")
+    app_version: str = _environment("TETHYSGUARD_APP_VERSION", "0.6.0")
     app_description: str = "Cybersecurity monitoring and threat detection platform"
     database_path: Path = Path(
         _environment("TETHYSGUARD_DATABASE_PATH", str(_default_database_path()))
