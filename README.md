@@ -205,7 +205,41 @@ Completed:
 - Reuse of detection, correlation, suppression, and investigation evidence
 - Synthetic SSH demo data and automated ingestion tests
 
-The React SOC dashboard is the next planned phase. See [PROGRESS.md](PROGRESS.md) for remaining ingestion limitations.
+See [PROGRESS.md](PROGRESS.md) for ingestion limitations and development progress.
+
+### Phase 7 - SOC dashboard frontend
+
+- React and TypeScript dashboard with totals, severity/status charts, and recent activity
+- Searchable, paginated alert/event tables with severity and status filters
+- Alert investigation with evidence, MITRE context, related events, and status updates
+- Central API client, loading/empty/error states, and responsive layout
+- Manual refresh and HTTP/REST integration; live delivery is a later phase
+
+## Run the SOC dashboard
+
+Start FastAPI using the backend command above, then open a second terminal:
+
+```powershell
+cd Frontend
+npm ci
+npm run dev
+```
+
+Use Node.js 24 LTS. Open http://localhost:5173. Vite proxies `/api` to http://127.0.0.1:8000.
+The frontend reads real backend data. An empty database shows empty states; use the SSH sample below to add demo activity.
+Open an alert, change its status, and click **Save status** to persist the change and record the backend audit history.
+Search and filter controls reset pagination. The Overview refresh button reloads the totals and recent activity.
+
+```powershell
+npm run build
+npm run lint
+npm test
+```
+
+The production build is written to `Frontend/dist`. Production hosting needs an SPA fallback to `index.html`
+and an `/api` reverse proxy, or a `VITE_API_BASE_URL` set before building (see `Frontend/.env.example`).
+If using a separate backend origin, configure the backend CORS allowlist for that origin.
+The API remains local-development only until authentication is implemented.
 
 ## Import telemetry
 
