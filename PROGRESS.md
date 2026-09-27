@@ -22,8 +22,12 @@ Validation: all 56 tests passed, including 15 new ingestion tests. The only warn
 - Existing body-size limit applies alongside the 100-record limit.
 - Local development API; authentication is required before external exposure.
 
-## Next phase
+## Phase 7 — SOC dashboard
 
-Build the React SOC dashboard: summary cards, filtered alert/event tables, and investigation details with status updates and related evidence.
+Added the React/TypeScript frontend with summary charts, filtered and paginated event/alert tables, and an alert investigation screen. The investigation screen retrieves evidence and related events and saves analyst status through the API. Requests use a central typed client; loading, empty, and failure states are visible. This phase uses manual refresh, not live push updates.
 
-Suggested Phase 6 commit: `feat: add batch telemetry ingestion and SSH log normalization`
+Validation commands: `cd Frontend`, then `npm ci`, `npm run build`, `npm run lint`, and `npm test`. Backend regression tests run with `python -m pytest` from the repository root.
+
+Next: Phase 8 analyst investigation workflow (notes, assignment, timeline, and additional audit actions).
+
+Suggested Phase 7 commit: `feat: add SOC dashboard and alert investigation frontend`
