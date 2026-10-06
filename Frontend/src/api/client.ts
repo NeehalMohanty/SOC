@@ -8,6 +8,8 @@ import type {
   RelatedEventsResponse,
   SecurityEvent,
   AlertStatus,
+  AlertActivity,
+  AlertTimeline,
 } from "./types";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
@@ -63,9 +65,19 @@ export const api = {
   alert: (alertId: number) => request<Alert>(`/api/alerts/${alertId}`),
   alertEvents: (alertId: number) =>
     request<RelatedEventsResponse>(`/api/alerts/${alertId}/events`),
-  updateAlertStatus: (alertId: number, status: AlertStatus) =>
+  updateAlertStatus: (alertId: number, status: AlertStatus, actor?: string, resolution?: "false_positive" | null) =>
     request<AlertUpdatedResponse>(`/api/alerts/${alertId}`, {
       method: "PATCH",
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, actor, resolution }),
     }),
+  assignAlert: (alertId: number, assigned_to: string | null, actor: string) =>
+    request<AlertUpdatedResponse>(`/api/alerts/${alertId}/assignment`, {
+      method: "PATCH", body: JSON.stringify({ assigned_to, actor }),
+    }),
+  addNote: (alertId: number, body: string, actor: string) =>
+    request<AlertActivity>(`/api/alerts/${alertId}/notes`, {
+      method: "POST", body: JSON.stringify({ body, actor }),
+    }),
+  timeline: (alertId: number, offset = 0) =>
+    request<AlertTimeline>(`/api/alerts/${alertId}/timeline?limit=25&offset=${offset}`),
 };

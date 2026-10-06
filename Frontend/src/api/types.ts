@@ -19,6 +19,8 @@ export interface RelatedSecurityEvent extends SecurityEvent {
 }
 
 export interface Alert {
+  assigned_to: string | null;
+  resolution: "false_positive" | null;
   id: number;
   event_id: number;
   title: string;
@@ -82,4 +84,21 @@ export interface EventListParams extends ListParams {
 
 export interface AlertListParams extends ListParams {
   status?: AlertStatus | "";
+}
+
+export interface AlertActivity {
+  id: number;
+  alert_id: number;
+  action: "created" | "status_changed" | "assigned" | "note_added";
+  actor: string;
+  details: Record<string, string | null>;
+  created_at: string;
+}
+
+export interface AlertTimeline {
+  count: number;
+  total: number;
+  limit: number;
+  offset: number;
+  activities: AlertActivity[];
 }

@@ -259,6 +259,8 @@ def test_detection_columns_are_added_without_losing_legacy_alerts(tmp_path):
             "detected_at",
             "detection_source",
             "correlation_key",
+            "assigned_to",
+            "resolution",
         } <= columns
         event_columns = {
             row["name"]

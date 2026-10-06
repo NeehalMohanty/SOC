@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -134,6 +135,8 @@ def initialize_database(database_path: Path | str | None = None) -> None:
             "detected_at": "TEXT",
             "detection_source": "TEXT",
             "correlation_key": "TEXT",
+            "assigned_to": "TEXT",
+            "resolution": "TEXT CHECK (resolution IS NULL OR resolution = 'false_positive')",
         }
         for column_name, column_type in detection_columns.items():
             if column_name not in existing_alert_columns:
@@ -157,7 +160,33 @@ def initialize_database(database_path: Path | str | None = None) -> None:
             """
         )
 
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS alert_activity (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                alert_id INTEGER NOT NULL REFERENCES alerts(id),
+                action TEXT NOT NULL CHECK (action IN ('status_changed', 'assigned', 'note_added')),
+                actor TEXT NOT NULL,
+                details TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                status_history_id INTEGER UNIQUE REFERENCES alert_status_history(id)
+            )
+        """)
+        # Preserve pre-Phase-8 history without inventing an analyst identity.
+        for row in connection.execute("""
+            SELECT h.* FROM alert_status_history h
+            LEFT JOIN alert_activity a ON a.status_history_id = h.id
+            WHERE a.id IS NULL
+        """).fetchall():
+            connection.execute("""
+                INSERT INTO alert_activity
+                    (alert_id, action, actor, details, created_at, status_history_id)
+                VALUES (?, 'status_changed', 'Unknown (legacy)', ?, ?, ?)
+            """, (row["alert_id"], json.dumps({
+                "previous_status": row["previous_status"], "new_status": row["new_status"],
+            }), row["changed_at"], row["id"]))
+
         indexes = (
+            "CREATE INDEX IF NOT EXISTS idx_activity_alert ON alert_activity(alert_id, created_at, id)",
             "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp)",
             "CREATE INDEX IF NOT EXISTS idx_events_source_ip ON events(source_ip)",
             "CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)",

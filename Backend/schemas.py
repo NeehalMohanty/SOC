@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, IPvAnyAddress, field_validator
+from pydantic import BaseModel, ConfigDict, Field, IPvAnyAddress, field_validator, model_validator
 
 
 class Severity(str, Enum):
@@ -70,6 +70,8 @@ class AlertRelatedEvent(SecurityEvent):
 
 
 class Alert(APIModel):
+    assigned_to: str | None = None
+    resolution: Literal["false_positive"] | None = None
     id: int
     event_id: int
     title: str
@@ -93,6 +95,14 @@ class Alert(APIModel):
 
 class AlertStatusUpdate(APIModel):
     status: AlertStatus
+    actor: str = Field(default="Local analyst", min_length=1, max_length=100)
+    resolution: Literal["false_positive"] | None = None
+
+    @model_validator(mode="after")
+    def validate_resolution(self):
+        if self.resolution is not None and self.status != AlertStatus.RESOLVED:
+            raise ValueError("A false-positive resolution requires resolved status")
+        return self
 
     @field_validator("status", mode="before")
     @classmethod
@@ -106,6 +116,40 @@ class AlertStatusHistory(APIModel):
     previous_status: AlertStatus
     new_status: AlertStatus
     changed_at: str
+
+
+class AnalystAction(APIModel):
+    actor: str = Field(min_length=1, max_length=100)
+
+
+class AlertAssignmentUpdate(AnalystAction):
+    assigned_to: str | None = Field(max_length=100)
+
+    @field_validator("assigned_to", mode="before")
+    @classmethod
+    def normalize_assignee(cls, value: Any) -> Any:
+        return (value.strip() or None) if isinstance(value, str) else value
+
+
+class AlertNoteCreate(AnalystAction):
+    body: str = Field(min_length=1, max_length=4000)
+
+
+class AlertActivity(APIModel):
+    id: int
+    alert_id: int
+    action: Literal["created", "status_changed", "assigned", "note_added"]
+    actor: str
+    details: dict[str, Any]
+    created_at: str
+
+
+class AlertTimelineResponse(APIModel):
+    count: int
+    total: int
+    limit: int
+    offset: int
+    activities: list[AlertActivity]
 
 
 class RootResponse(APIModel):
