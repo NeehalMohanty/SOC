@@ -28,6 +28,35 @@ Added the React/TypeScript frontend with summary charts, filtered and paginated 
 
 Validation commands: `cd Frontend`, then `npm ci`, `npm run build`, `npm run lint`, and `npm test`. Backend regression tests run with `python -m pytest` from the repository root.
 
-Next: Phase 8 analyst investigation workflow (notes, assignment, timeline, and additional audit actions).
-
 Suggested Phase 7 commit: `feat: add SOC dashboard and alert investigation frontend`
+
+## Phase 8 — Analyst investigation workflow
+
+- Added analyst assignment and unassignment, displayed on the alert detail and queue screens.
+- Added append-only notes, rendered as plain text.
+- Added a paginated investigation timeline containing creation, notes, ownership changes, and status changes.
+- Added false-positive resolution and reopening, while retaining existing database status values.
+- Preserved historical status entries with an idempotent backfill labeled `Unknown (legacy)`.
+- Kept workflow changes and audit entries atomic; failures roll back both.
+- Added input validation, missing-alert, pagination, legacy preservation, rollback, and frontend interaction tests.
+
+False positives are stored as resolved alerts with a separate resolution field. They remain part
+of the dashboard's resolved count. Reopening clears the resolution but retains investigation history.
+The schema upgrade is additive; no existing tables are replaced or data deleted.
+
+Validation: 73 backend tests and 13 frontend tests; production build and lint pass.
+A headless Edge browser check covered assignment, notes, resolution, persistence after reload,
+reopening, and desktop/mobile layout using an isolated temporary database.
+
+### Current boundaries
+
+- Analyst and assignee names are unverified labels, not authenticated users.
+- This is not a tamper-proof audit system; use locally until authentication and permissions exist.
+- Notes cannot be edited or deleted through the app; corrections are follow-up notes.
+- Concurrent edits use last-write-wins behavior; no optimistic conflict detection yet.
+- A timed-out note submission may have been stored; refresh before retrying.
+- The timeline refreshes after local changes or manually, not via live updates.
+
+Next: Phase 9 authentication and role-based permissions.
+
+Suggested Phase 8 commit: `feat: add analyst investigation workflow`

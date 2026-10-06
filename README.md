@@ -16,6 +16,8 @@ TethysGuard is a cybersecurity monitoring and threat-detection platform built as
 - Related-event evidence for alert investigation
 - Alert lookup and status updates
 - Alert status audit history
+- Analyst assignment, append-only investigation notes, and a paginated activity timeline
+- False-positive resolution and reopening with preserved audit history
 - Paginated event and alert search
 - Severity, status, source IP, event type, and date filters
 - Dashboard statistics
@@ -34,9 +36,11 @@ TethysGuard/
 |   |-- database.py    # SQLite connections and schema setup
 |   |-- detection.py   # Detection rules
 |   |-- ingestion.py   # Telemetry adapters and batch processing
+|   |-- investigation.py # Assignment, notes, and activity history
 |   |-- main.py        # FastAPI application setup
 |   |-- schemas.py     # Request and response models
 |   `-- services.py    # Application and database operations
+|-- Frontend/          # React/TypeScript SOC dashboard and UI tests
 |-- tests/             # Automated API tests
 |-- examples/          # Synthetic telemetry for local demonstrations
 |-- .env.example       # Safe configuration example
@@ -118,6 +122,9 @@ Existing installations retain access to their original database: if `Backend/tet
 | `GET` | `/api/alerts/{alert_id}/events` | Retrieve events related to an alert |
 | `PATCH` | `/api/alerts/{alert_id}` | Update alert status |
 | `GET` | `/api/alerts/{alert_id}/history` | Retrieve alert status history |
+| `PATCH` | `/api/alerts/{alert_id}/assignment` | Assign or unassign an alert |
+| `POST` | `/api/alerts/{alert_id}/notes` | Append an analyst note |
+| `GET` | `/api/alerts/{alert_id}/timeline` | Retrieve paginated investigation activity |
 | `GET` | `/api/dashboard/stats` | Retrieve dashboard statistics |
 
 ## Pagination and filters
@@ -132,7 +139,7 @@ GET /api/events?source_ip=192.0.2.10&event_type=port_scan
 GET /api/alerts?status=open&severity=critical&search=malware
 ```
 
-Both list responses include `count`, `total`, `limit`, and `offset` so a future frontend can build page controls correctly.
+Both list responses include `count`, `total`, `limit`, and `offset`, used by the dashboard page controls.
 
 ## Development status
 
@@ -215,6 +222,16 @@ See [PROGRESS.md](PROGRESS.md) for ingestion limitations and development progres
 - Central API client, loading/empty/error states, and responsive layout
 - Manual refresh and HTTP/REST integration; live delivery is a later phase
 
+### Phase 8 - Analyst investigation workflow
+
+- Assign/unassign alerts and display ownership in the alert queue
+- Append analyst notes with timestamps and actor labels
+- Paginated newest-first timeline showing creation, assignment, notes, and status changes
+- False-positive resolution, normal resolution, and reopening
+- Atomic workflow/audit writes, legacy-history backfill, and regression tests
+
+Next: Phase 9 authentication and role-based permissions.
+
 ## Run the SOC dashboard
 
 Start FastAPI using the backend command above, then open a second terminal:
@@ -240,6 +257,56 @@ The production build is written to `Frontend/dist`. Production hosting needs an 
 and an `/api` reverse proxy, or a `VITE_API_BASE_URL` set before building (see `Frontend/.env.example`).
 If using a separate backend origin, configure the backend CORS allowlist for that origin.
 The API remains local-development only until authentication is implemented.
+
+## Try an investigation
+
+1. Start the backend and frontend, then open an alert from **Alerts**.
+2. Enter your name in **Acting analyst**. Enter an assignee and choose **Save assignment**.
+3. Change the status to **Investigating** and save it.
+4. Write the evidence you checked in **Investigation note**, then choose **Add note**.
+5. Resolve the alert normally or choose **False Positive**. Reload the page to check persistence.
+6. Check the timeline for each action. Reopen the alert if more investigation is needed.
+
+Blank assignee text unassigns the alert. Notes support up to 4,000 characters; actor and
+assignee labels support up to 100. Notes render as plain text and cannot be edited or deleted
+through the API. Use a follow-up note for corrections. The existing request byte limit still applies.
+
+False positives use `status: "resolved"` plus `resolution: "false_positive"`.
+This preserves existing database status constraints, filters, and dashboard counts; false positives
+are included in the resolved count. Reopening clears the resolution, not the notes or history.
+A status update with no resolution clears any previous false-positive classification.
+
+Example request bodies:
+
+```json
+{"actor": "Neehal", "assigned_to": "Neehal"}
+```
+
+Send this to `PATCH /api/alerts/1/assignment`; use `null` to unassign.
+
+```json
+{"actor": "Neehal", "body": "Checked host logs; this was an authorized lab scan."}
+```
+
+Send this to `POST /api/alerts/1/notes`.
+
+```json
+{"actor": "Neehal", "status": "resolved", "resolution": "false_positive"}
+```
+
+Send this to `PATCH /api/alerts/1`. Existing status-only clients still work and are recorded
+as `Local analyst`. Timeline requests accept `limit` (default 25, maximum 100) and `offset`.
+The old `/history` endpoint continues to return status transitions only.
+
+Startup adds nullable assignment/resolution fields and a new activity table without rebuilding
+or deleting existing tables. Old status history is imported once as `Unknown (legacy)`;
+new workflow actions and their audit entries commit together. Back up any valued database
+before upgrading, as with any schema change.
+
+This is a local, single-user learning workflow: names are self-reported, there are no role checks,
+and database history is not tamper-proof. Multiple editors use last-write-wins updates.
+Notes are not idempotent: if a request times out, refresh the timeline before retrying to avoid duplicates.
+Authentication and trusted actor identities are Phase 9 work.
 
 ## Import telemetry
 

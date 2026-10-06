@@ -7,6 +7,7 @@ from Backend.config import settings
 from Backend.correlation import CorrelationContext, correlate_events
 from Backend.database import database_connection
 from Backend.detection import DetectionContext, analyze_event
+from Backend.investigation import record_activity
 from Backend.schemas import AlertStatus, SecurityEventCreate, Severity
 
 
@@ -475,24 +476,29 @@ def update_alert_status(
     alert_id: int,
     new_status: AlertStatus,
     database_path: Path | str,
+    *,
+    actor: str = "Local analyst",
+    resolution: str | None = None,
 ) -> dict[str, Any] | None:
-    changed_at = datetime.now(timezone.utc).isoformat()
-
     with database_connection(database_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        changed_at = datetime.now(timezone.utc).isoformat()
         existing_alert = connection.execute(
-            "SELECT id, status FROM alerts WHERE id = ?",
+            "SELECT id, status, resolution FROM alerts WHERE id = ?",
             (alert_id,),
         ).fetchone()
         if existing_alert is None:
             return None
 
         previous_status = existing_alert["status"]
+        resolution = resolution if new_status == AlertStatus.RESOLVED else None
+        history_id = None
         if previous_status != new_status.value:
             connection.execute(
                 "UPDATE alerts SET status = ? WHERE id = ?",
                 (new_status.value, alert_id),
             )
-            connection.execute(
+            history_cursor = connection.execute(
                 """
                 INSERT INTO alert_status_history (
                     alert_id,
@@ -504,6 +510,14 @@ def update_alert_status(
                 """,
                 (alert_id, previous_status, new_status.value, changed_at),
             )
+            history_id = history_cursor.lastrowid
+
+        if previous_status != new_status.value or existing_alert["resolution"] != resolution:
+            connection.execute("UPDATE alerts SET resolution = ? WHERE id = ?", (resolution, alert_id))
+            record_activity(connection, alert_id, "status_changed", actor, {
+                "previous_status": previous_status, "new_status": new_status.value,
+                "previous_resolution": existing_alert["resolution"], "resolution": resolution,
+            }, changed_at, history_id)
 
         updated_alert = connection.execute(
             "SELECT * FROM alerts WHERE id = ?",
